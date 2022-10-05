@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "target": "ESNext"
+//     "alwaysStrict": true,
+//     "strictNullChecks": false,
+//     "emitDeclarationOnly": true,
+//     "declaration": true,
+//     "outDir": "types",
+//     "removeComments": false
+  },
+  "include": ["index.js"],
+  "exclude": ["__tests__", "node_modules", "types"]
+}

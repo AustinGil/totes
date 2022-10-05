@@ -20,49 +20,132 @@ class LazyPromise extends Promise {
   }
 }
 
-/**
- * @param {Parameters<typeof fetch>[0]} input
- * @param {Parameters<typeof fetch>[1]} [init]
- */
-function fethh(input, init = {}) {
-  const controller = new AbortController();
-  if (!init.signal) {
-    init.signal = controller.signal;
-  }
+const factory = (function create(defaults = {}) {
+  /**
+   * @param {Parameters<typeof fetch>[0]} url
+   * @param {Parameters<typeof fetch>[1] & {
+   * data?: string | object,
+   * json?: string | object,
+   * timeout?: number
+   * retry?: number
+   * retryWait?: number
+   * retryExponential?: boolean,
+   * modifyRequest?: (init: Parameters<typeof fethh>[1]) => Parameters<typeof fethh>[1]
+   * modifyResponse?: (response: ReturnType<fethh>) => any
+   * }} [init]
+   */
+  function fethh(url, init = {}) {
+    if (defaults.baseUrl) {
+      url = new URL(url, defaults.baseUrl);
+    }
+    init = {
+      ...defaults,
+      ...init,
+    };
+    const controller = new AbortController();
+    if (!init.signal) {
+      init.signal = controller.signal;
+    }
+    init.headers = init.headers || {};
 
-  // Create custom return Promise with custom properties
-  /** @type {Promise<Response & { data: any }> & { abort: typeof controller.abort }} */
-  const promise = new LazyPromise((resolve, reject) => {
-    fetch(input, init)
-      .then((response) => {
-        // In the event of bad requests, throw custom error with access to response object
+    // Create custom return Promise with custom properties
+    /** @type {Promise<Response & { data: any }> & { abort: typeof controller.abort }} */
+    const promise = new LazyPromise(async (resolve, reject) => {
+      try {
+        if (init.timeout != undefined) {
+          setTimeout(() => {
+            reject(new FethhError('HTTP request exceeded timeout limit.'));
+          }, init.timeout);
+        }
+
+        if (
+          !init.body &&
+          ['POST', 'PATCH', 'PUT'].includes(init.method?.toUpperCase())
+        ) {
+          if (init.json) {
+            init.headers['content-type'] = 'application/json';
+            init.body = JSON.stringify(init.json);
+          }
+          init.body = new URLSearchParams(init.data);
+        }
+
+        if (init.modifyRequest) {
+          init = init.modifyRequest(init);
+        }
+
+        let response = await fetch(url, init);
+        // In the event of bad requests
         if (!response.ok) {
-          // TODO: How to handle 300s?
-          throw new FethhError(`${response.status} ${response.statusText}`, {
-            cause: response,
-          });
+          const retry = init.retry;
+          // Check if we need to retry request more times
+          if (retry) {
+            init.retryWait = init.retryWait || 500;
+            console.log('retrying', retry, init.retryWait);
+            await new Promise((r) => setTimeout(r, init.retryWait));
+
+            const exponential =
+              init.retryExponential != undefined ? init.retryExponential : true;
+            init.retryWait = exponential ? init.retryWait * 2 : init.retryWait;
+            return resolve(
+              fethh(url, {
+                ...init,
+                retry: retry - 1,
+              })
+            );
+          } else {
+            // throw custom error with access to response object
+            // TODO: How to handle 300s?
+            throw new FethhError(`${response.status} ${response.statusText}`, {
+              cause: response,
+            });
+          }
         }
 
         // Grab response.json for JSON, otherwise use response.text
-        let method = 'text';
-        if (response.headers.get('content-type').includes('application/json')) {
-          method = 'json';
+        let bodyType = 'text';
+        if (
+          response.headers.get('content-type')?.includes('application/json')
+        ) {
+          bodyType = 'json';
         }
+
         // Append data property to response object with results
-        return response[method]().then((data) => {
-          response.data = data;
-          return response;
-        });
-      })
-      .then((response) => {
-        // setTimeout(() => resolve(response), 300);
+        const data = await response[bodyType]();
+        response.data = data;
+
+        if (init.modifyResponse) {
+          response = init.modifyResponse(response);
+        }
+
         resolve(response);
-      })
-      .catch(reject);
-  });
+      } catch (error) {
+        reject(error);
+      }
+    });
 
-  promise.abort = () => controller.abort();
-  return promise;
-}
+    promise.abort = () => controller.abort();
+    return promise;
+  }
 
-export default fethh;
+  /** @typedef {(url: Parameters<typeof fethh>[0], init: Parameters<typeof fethh>[1]) => ReturnType<fethh>} FethhMethod */
+  /** @type {FethhMethod} */
+  fethh.get = (url, init) => fethh(url, { ...init, method: 'get' });
+  /** @type {FethhMethod} */
+  fethh.post = (url, init) => fethh(url, { ...init, method: 'post' });
+  /** @type {FethhMethod} */
+  fethh.put = (url, init) => fethh(url, { ...init, method: 'put' });
+  /** @type {FethhMethod} */
+  fethh.patch = (url, init) => fethh(url, { ...init, method: 'patch' });
+  /** @type {FethhMethod} */
+  fethh.delete = (url, init) => fethh(url, { ...init, method: 'delete' });
+
+  fethh.create = create;
+
+  return fethh;
+})();
+
+// fethh.create = (defaultInit) => {
+//   return (url, init) => fethh(url, { ...defaultInit, ...init });
+// };
+
+export default factory;
